@@ -175,6 +175,63 @@ def visualize_spectrum(y):
     output = np.array([r, g,b]) * 255
     return output
 
+_kick_history = dsp.ExpFilter(np.tile(0.01, config.N_FFT_BINS),
+                               alpha_decay=0.3, alpha_rise=0.99)
+_kick_filt    = dsp.ExpFilter(val=0.0, alpha_decay=0.4, alpha_rise=0.99)
+_strobe_filt  = dsp.ExpFilter(val=0.0, alpha_decay=0.6, alpha_rise=0.99)
+_drop_detector = dsp.ExpFilter(val=0.0, alpha_decay=0.005, alpha_rise=0.005)
+
+def visualize_techno(y):
+    """Techno : strobe sur le kick, violet/cyan sur les basses, noir entre les beats."""
+    global p
+
+    y = np.copy(y)
+    _kick_history.update(y)
+    y /= (_kick_history.value + 1e-6)
+
+    n_kick = max(1, int(len(y) * 0.15))
+    kick_energy = float(np.mean(y[:n_kick] ** 2.0))
+    kick = float(_kick_filt.update(kick_energy))
+
+    kick_delta = max(0.0, kick_energy - _kick_filt.value * 0.8)
+    strobe = float(_strobe_filt.update(kick_delta))
+
+    # Mesure l'énergie globale sur le long terme → détecte les drops
+    global_energy = float(np.mean(y))
+    _drop_detector.update(global_energy)
+    drop_intensity = np.clip(global_energy / (_drop_detector.value + 1e-6) - 1.0, 0.0, 1.0)
+
+    n_mid  = int(len(y) * 0.5)
+    bass   = float(np.mean(y[:n_mid]))
+    treble = float(np.mean(y[n_mid:]))
+
+    # Seuil : en dessous = noir total
+    THRESHOLD = 0.7
+    bass   = max(0.0, bass   - THRESHOLD)
+    treble = max(0.0, treble - THRESHOLD)
+
+    half = config.N_PIXELS // 2
+    out  = np.zeros((3, half))
+
+    # Multiplicateurs réduits + exposant pour accentuer le contraste
+    r_val = np.clip(bass   ** 1.5 * 400 * (0.2 + drop_intensity), 0, 255)
+    g_val = np.clip(treble ** 1.5 * 200 * (0.2 + drop_intensity), 0, 255)
+    b_val = np.clip((bass  ** 1.5 * 0.6 + treble ** 1.5 * 0.4) * 500 * (0.2 + drop_intensity ), 0, 255)
+
+    n_active = max(1, int(kick * float(half)))
+    out[0, :n_active] = r_val
+    out[1, :n_active] = g_val
+    out[2, :n_active] = b_val
+
+    if strobe > 0.5 and drop_intensity < 0.5:
+        brightness = min(255.0, strobe * 300 * drop_intensity)
+        out[:, :] = brightness
+
+    out[0] = gaussian_filter1d(out[0], sigma=1.5)
+    out[1] = gaussian_filter1d(out[1], sigma=1.5)
+    out[2] = gaussian_filter1d(out[2], sigma=1.5)
+
+    return np.concatenate((out[:, ::-1], out), axis=1)
 
 fft_plot_filter = dsp.ExpFilter(np.tile(1e-1, config.N_FFT_BINS),
                          alpha_decay=0.5, alpha_rise=0.99)
@@ -318,28 +375,41 @@ if __name__ == '__main__':
         def energy_click(x):
             global visualization_effect
             visualization_effect = visualize_energy
-            energy_label.setText('Energy', color=active_color)
-            scroll_label.setText('Scroll', color=inactive_color)
+            energy_label.setText('Energy',   color=inactive_color)
+            scroll_label.setText('Scroll',   color=inactive_color)
             spectrum_label.setText('Spectrum', color=inactive_color)
+            techno_label.setText('Techno',   color=active_color)
         def scroll_click(x):
             global visualization_effect
             visualization_effect = visualize_scroll
-            energy_label.setText('Energy', color=inactive_color)
-            scroll_label.setText('Scroll', color=active_color)
+            energy_label.setText('Energy',   color=inactive_color)
+            scroll_label.setText('Scroll',   color=inactive_color)
             spectrum_label.setText('Spectrum', color=inactive_color)
+            techno_label.setText('Techno',   color=active_color)
         def spectrum_click(x):
             global visualization_effect
             visualization_effect = visualize_spectrum
-            energy_label.setText('Energy', color=inactive_color)
-            scroll_label.setText('Scroll', color=inactive_color)
-            spectrum_label.setText('Spectrum', color=active_color)
+            energy_label.setText('Energy',   color=inactive_color)
+            scroll_label.setText('Scroll',   color=inactive_color)
+            spectrum_label.setText('Spectrum', color=inactive_color)
+            techno_label.setText('Techno',   color=active_color)
+            
+        def techno_click(x):
+            global visualization_effect
+            visualization_effect = visualize_techno
+            energy_label.setText('Energy',   color=inactive_color)
+            scroll_label.setText('Scroll',   color=inactive_color)
+            spectrum_label.setText('Spectrum', color=inactive_color)
+            techno_label.setText('Techno',   color=active_color)
         # Create effect "buttons" (labels with click event)
         energy_label = pg.LabelItem('Energy')
         scroll_label = pg.LabelItem('Scroll')
         spectrum_label = pg.LabelItem('Spectrum')
+        techno_label = pg.LabelItem('Techno')
         energy_label.mousePressEvent = energy_click
         scroll_label.mousePressEvent = scroll_click
         spectrum_label.mousePressEvent = spectrum_click
+        techno_label.mousePressEvent = techno_click
         energy_click(0)
         # Layout
         layout.nextRow()
@@ -350,6 +420,7 @@ if __name__ == '__main__':
         layout.addItem(energy_label)
         layout.addItem(scroll_label)
         layout.addItem(spectrum_label)
+        layout.addItem(techno_label)
     # Initialize LEDs
     led.update()
     # Start listening to live audio stream

@@ -6,7 +6,7 @@ import numpy as np
 import config
 
 # ESP8266 uses WiFi communication
-if config.DEVICE == 'esp8266':
+if config.DEVICE == 'esp8266' or config.DEVICE == 'pi_udp':
     import socket
     _sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Raspberry Pi controls the LED strip directly
@@ -109,6 +109,21 @@ def _update_pi():
     _prev_pixels = np.copy(p)
     strip.show()
 
+def _update_pi_udp():
+    """Envoie tous les pixels en UDP format interleaved RGB, compatible avec le receiver Pi"""
+    global pixels, _prev_pixels
+    pixels = np.clip(pixels, 0, 255).astype(int)
+    p = _gamma[pixels] if config.SOFTWARE_GAMMA_CORRECTION else np.copy(pixels)
+    
+    m = []
+    for i in range(config.N_PIXELS):
+        m.append(p[0][i])  # R
+        m.append(p[1][i])  # G
+        m.append(p[2][i])  # B
+    
+    _sock.sendto(bytes(m), (config.UDP_IP, config.UDP_PORT))
+    _prev_pixels = np.copy(p)
+
 def _update_blinkstick():
     """Writes new LED values to the Blinkstick.
         This function updates the LED strip with new values.
@@ -142,6 +157,8 @@ def update():
         _update_esp8266()
     elif config.DEVICE == 'pi':
         _update_pi()
+    elif config.DEVICE == 'pi_udp':       # ← nouveau
+        _update_pi_udp()
     elif config.DEVICE == 'blinkstick':
         _update_blinkstick()
     else:
